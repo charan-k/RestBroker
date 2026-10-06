@@ -100,47 +100,105 @@ try {
 
 pin_dockerfiles() {
     local source_dir="$1"
+    local model_file="$2"
     [[ -d "$source_dir" ]] || fail "pinned source directory is missing"
+    [[ -f "$model_file" ]] || fail "merged Compose model is missing"
 
-    node - "$source_dir" "$JAVA_IMAGE" "$NODE_IMAGE" <<'NODE'
+    node - "$source_dir" "$model_file" "$JAVA_IMAGE" "$NODE_IMAGE" <<'NODE'
 const fs = require("node:fs");
 const path = require("node:path");
 
-const root = path.resolve(process.argv[2]);
-const javaImage = process.argv[3];
-const nodeImage = process.argv[4];
+const root = fs.realpathSync(process.argv[2]);
+const modelFile = process.argv[3];
+const javaImage = process.argv[4];
+const nodeImage = process.argv[5];
 const fail = (reason) => {
   console.error(`Pinned Dockerfile check failed: ${reason}`);
   process.exit(1);
 };
-const expectedFiles = [
-  "assets/Dockerfile",
-  "auth/Dockerfile",
-  "booking/Dockerfile",
-  "branding/Dockerfile",
-  "message/Dockerfile",
-  "report/Dockerfile",
-  "room/Dockerfile",
+const expectedServices = [
+  "rbp-assets",
+  "rbp-auth",
+  "rbp-booking",
+  "rbp-branding",
+  "rbp-message",
+  "rbp-report",
+  "rbp-room",
 ].sort();
-const foundFiles = [];
-const visit = (directory) => {
-  for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
-    if (entry.isSymbolicLink()) fail("symbolic links are not allowed in Dockerfile inputs");
-    const fullPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) visit(fullPath);
-    else if (entry.name === "Dockerfile") foundFiles.push(path.relative(root, fullPath).split(path.sep).join("/"));
+let model;
+try {
+  model = JSON.parse(fs.readFileSync(modelFile, "utf8"));
+} catch {
+  fail("merged Compose model is not valid JSON");
+}
+const services = model?.services;
+if (!services || JSON.stringify(Object.keys(services).sort()) !== JSON.stringify(expectedServices)) {
+  fail("service set differs from the pinned platform");
+}
+
+const realpathInside = (base, candidate, description) => {
+  let resolved;
+  try {
+    resolved = fs.realpathSync(candidate);
+  } catch {
+    fail(`${description} is missing`);
   }
+  const relative = path.relative(base, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    fail(`${description} is outside the pinned source`);
+  }
+  return resolved;
 };
-visit(root);
-foundFiles.sort();
-if (JSON.stringify(foundFiles) !== JSON.stringify(expectedFiles)) {
-  fail("Dockerfile set differs from the pinned platform");
+
+const dockerfiles = [];
+for (const serviceName of expectedServices) {
+  const service = services[serviceName];
+  const contextValue = service?.build?.context;
+  if (typeof contextValue !== "string" || contextValue.length === 0) {
+    fail(`build context is missing for ${serviceName}`);
+  }
+  const contextCandidate = path.isAbsolute(contextValue) ? contextValue : path.resolve(root, contextValue);
+  let contextStat;
+  try {
+    contextStat = fs.lstatSync(contextCandidate);
+  } catch {
+    fail(`build context for ${serviceName} is missing`);
+  }
+  if (contextStat.isSymbolicLink()) fail(`build context for ${serviceName} is a symbolic link`);
+  const context = realpathInside(root, contextCandidate, `build context for ${serviceName}`);
+  if (!fs.statSync(context).isDirectory()) {
+    fail(`build context for ${serviceName} is not a directory`);
+  }
+
+  const dockerfileValue = service.build.dockerfile ?? "Dockerfile";
+  if (typeof dockerfileValue !== "string" || dockerfileValue.length === 0 || path.isAbsolute(dockerfileValue)) {
+    fail(`Dockerfile path is invalid for ${serviceName}`);
+  }
+  const dockerfileCandidate = path.resolve(context, dockerfileValue);
+  const relativeToContext = path.relative(context, dockerfileCandidate);
+  if (relativeToContext === ".." || relativeToContext.startsWith(`..${path.sep}`) || path.isAbsolute(relativeToContext)) {
+    fail(`Dockerfile path escapes the build context for ${serviceName}`);
+  }
+  let dockerfileStat;
+  try {
+    dockerfileStat = fs.lstatSync(dockerfileCandidate);
+  } catch {
+    fail(`Dockerfile for ${serviceName} is missing`);
+  }
+  if (dockerfileStat.isSymbolicLink() || !dockerfileStat.isFile()) {
+    fail(`Dockerfile for ${serviceName} is not a regular file`);
+  }
+  const dockerfile = realpathInside(context, dockerfileCandidate, `Dockerfile for ${serviceName}`);
+  dockerfiles.push({ serviceName, file: dockerfile });
+}
+if (new Set(dockerfiles.map(({ file }) => file)).size !== expectedServices.length) {
+  fail("Compose services do not map to distinct Dockerfiles");
 }
 
 const rewrites = [];
 const aliasPattern = /^FROM\s+(?:--platform=\S+\s+)?(\S+)(?:\s+AS\s+(\S+))?/i;
-for (const relativePath of expectedFiles) {
-  const file = path.join(root, relativePath);
+for (const { serviceName, file } of dockerfiles) {
+  const relativePath = path.relative(root, file).split(path.sep).join("/");
   const original = fs.readFileSync(file, "utf8");
   const lines = original.split(/(?<=\n)/);
   let javaCount = 0;
@@ -157,7 +215,7 @@ for (const relativePath of expectedFiles) {
     return line;
   }).join("");
 
-  const expectedCount = relativePath === "assets/Dockerfile" ? nodeCount === 1 && javaCount === 0 : javaCount === 1 && nodeCount === 0;
+  const expectedCount = serviceName === "rbp-assets" ? nodeCount === 1 && javaCount === 0 : javaCount === 1 && nodeCount === 0;
   if (!expectedCount) fail(`unexpected base-image reference in ${relativePath}`);
 
   const aliases = new Set();
@@ -178,6 +236,7 @@ for (const item of rewrites) {
   fs.writeFileSync(temporary, item.rewritten, { flag: "wx" });
   fs.renameSync(temporary, item.file);
 }
+console.log(`Pinned ${rewrites.length} Dockerfiles from ${expectedServices.length} Compose services.`);
 NODE
 }
 
@@ -236,8 +295,8 @@ main() {
             return
             ;;
         --pin-dockerfiles)
-            [[ $# -eq 2 ]] || fail "usage: provision-ui.sh --pin-dockerfiles <source-directory>"
-            pin_dockerfiles "$2"
+            [[ $# -eq 3 ]] || fail "usage: provision-ui.sh --pin-dockerfiles <source-directory> <compose-model-json>"
+            pin_dockerfiles "$2" "$3"
             return
             ;;
         "")
@@ -310,9 +369,6 @@ main() {
         fail "Maven archive extraction failed"
     local maven="$WORK_DIR/tools/apache-maven-$MAVEN_VERSION/bin/mvn"
 
-    CURRENT_STAGE="base-image pinning"
-    pin_dockerfiles "$SOURCE_DIR"
-
     CURRENT_STAGE="upstream Maven build"
     run_bounded "$maven" --batch-mode --no-transfer-progress -f "$SOURCE_DIR/pom.xml" clean install -DskipTests \
         >>"$WORK_DIR/command.log" 2>&1 || fail "pinned source Maven build failed"
@@ -346,6 +402,9 @@ YAML
         fail "Compose configuration could not be rendered"
     validate_compose_model "$WORK_DIR/compose-model.json"
     COMPOSE_CONFIGURED="true"
+
+    CURRENT_STAGE="base-image pinning"
+    pin_dockerfiles "$SOURCE_DIR" "$WORK_DIR/compose-model.json"
 
     CURRENT_STAGE="platform build and startup"
     run_bounded "${compose_args[@]}" up --build --detach >>"$WORK_DIR/command.log" 2>&1 ||

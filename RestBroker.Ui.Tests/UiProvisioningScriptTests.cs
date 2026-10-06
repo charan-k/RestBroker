@@ -132,10 +132,12 @@ public sealed class UiProvisioningScriptTests
     public void PinDockerfiles_WithExpectedPinnedSourceReferences_RewritesAllBaseImages()
     {
         var source = CreateSourceFixture();
+        var model = WriteComposeModel(CreateComposeModel(source));
 
-        var result = RunScript(_provisionScript, "--pin-dockerfiles", source);
+        var result = RunScript(_provisionScript, "--pin-dockerfiles", source, model);
 
         Assert.That(result.ExitCode, Is.Zero, result.StandardError);
+        Assert.That(result.StandardOutput, Does.Contain("Pinned 7 Dockerfiles from 7 Compose services."));
         Assert.That(File.ReadAllText(Path.Combine(source, "booking", "Dockerfile")),
             Does.Contain("eclipse-temurin:26-jre-alpine@sha256:"));
         Assert.That(File.ReadAllText(Path.Combine(source, "assets", "Dockerfile")),
@@ -146,10 +148,11 @@ public sealed class UiProvisioningScriptTests
     public void PinDockerfiles_WhenExpectedBaseReferenceDrifts_FailsWithoutPartialRewrite()
     {
         var source = CreateSourceFixture();
+        var model = WriteComposeModel(CreateComposeModel(source));
         var driftedFile = Path.Combine(source, "assets", "Dockerfile");
         File.WriteAllText(driftedFile, "FROM node:25 AS base\nFROM base AS runner\n");
 
-        var result = RunScript(_provisionScript, "--pin-dockerfiles", source);
+        var result = RunScript(_provisionScript, "--pin-dockerfiles", source, model);
 
         Assert.That(result.ExitCode, Is.Not.Zero);
         Assert.That(result.StandardError, Does.Contain("unexpected base-image reference in assets/Dockerfile"));
@@ -159,26 +162,46 @@ public sealed class UiProvisioningScriptTests
     }
 
     [Test]
-    public void PinDockerfiles_WhenAdditionalDockerfileAppears_Fails()
+    public void PinDockerfiles_IgnoresDockerfilesOutsideComposeBuildContexts()
     {
         var source = CreateSourceFixture();
-        Directory.CreateDirectory(Path.Combine(source, "new-service"));
-        File.WriteAllText(Path.Combine(source, "new-service", "Dockerfile"), "FROM alpine:latest\n");
+        var utilityDockerfile = Path.Combine(source, ".utilities", "wirebridge", "Dockerfile");
+        Directory.CreateDirectory(Path.GetDirectoryName(utilityDockerfile)!);
+        File.WriteAllText(utilityDockerfile, "FROM maven:3.5.2-jdk-8-alpine\n");
+        var model = WriteComposeModel(CreateComposeModel(source));
 
-        var result = RunScript(_provisionScript, "--pin-dockerfiles", source);
+        var result = RunScript(_provisionScript, "--pin-dockerfiles", source, model);
+
+        Assert.That(result.ExitCode, Is.Zero, result.StandardError);
+        Assert.That(result.StandardOutput, Does.Contain("Pinned 7 Dockerfiles from 7 Compose services."));
+        Assert.That(File.ReadAllText(utilityDockerfile), Is.EqualTo("FROM maven:3.5.2-jdk-8-alpine\n"));
+        Assert.That(Directory.GetFiles(source, "Dockerfile", SearchOption.AllDirectories), Has.Length.EqualTo(8));
+    }
+
+    [Test]
+    public void PinDockerfiles_WhenComposeBuildContextHasNoDockerfile_FailsWithoutPartialRewrite()
+    {
+        var source = CreateSourceFixture();
+        File.Delete(Path.Combine(source, "room", "Dockerfile"));
+        var model = WriteComposeModel(CreateComposeModel(source));
+
+        var result = RunScript(_provisionScript, "--pin-dockerfiles", source, model);
 
         Assert.That(result.ExitCode, Is.Not.Zero);
-        Assert.That(result.StandardError, Does.Contain("Dockerfile set differs from the pinned platform"));
+        Assert.That(result.StandardError, Does.Contain("Dockerfile for rbp-room is missing"));
+        Assert.That(File.ReadAllText(Path.Combine(source, "booking", "Dockerfile")),
+            Is.EqualTo("FROM eclipse-temurin:26-jre-alpine\n"));
     }
 
     [Test]
     public void PinDockerfiles_WithUnapprovedDigestPinnedImage_FailsWithoutPartialRewrite()
     {
         var source = CreateSourceFixture();
+        var model = WriteComposeModel(CreateComposeModel(source));
         var dockerfile = Path.Combine(source, "booking", "Dockerfile");
         File.AppendAllText(dockerfile, "FROM alpine:3.22@sha256:" + new string('a', 64) + "\n");
 
-        var result = RunScript(_provisionScript, "--pin-dockerfiles", source);
+        var result = RunScript(_provisionScript, "--pin-dockerfiles", source, model);
 
         Assert.That(result.ExitCode, Is.Not.Zero);
         Assert.That(result.StandardError, Does.Contain("unexpected external base image in booking/Dockerfile"));
@@ -241,12 +264,12 @@ public sealed class UiProvisioningScriptTests
         return path;
     }
 
-    private JsonObject CreateComposeModel()
+    private JsonObject CreateComposeModel(string? sourceDirectory = null)
     {
         var services = new JsonObject();
         foreach (var service in Services)
         {
-            services[service] = service == "rbp-assets"
+            var definition = service == "rbp-assets"
                 ? new JsonObject
                 {
                     ["ports"] = new JsonArray
@@ -261,6 +284,15 @@ public sealed class UiProvisioningScriptTests
                     }
                 }
                 : new JsonObject();
+            if (sourceDirectory is not null)
+            {
+                definition["build"] = new JsonObject
+                {
+                    ["context"] = Path.Combine(sourceDirectory, service["rbp-".Length..]),
+                    ["dockerfile"] = "Dockerfile"
+                };
+            }
+            services[service] = definition;
         }
 
         return new JsonObject { ["services"] = services };
