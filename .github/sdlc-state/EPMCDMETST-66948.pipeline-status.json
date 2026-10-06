@@ -13,8 +13,8 @@
                          ],
     "artifact_pending_approval":  null,
     "last_updated":  "2026-10-06T19:00:00+05:30",
-    "approval_pending":  "Approve the exact final PR body and changelog entry before updating PR #1.",
-    "revision_reason":  "Phase 6 Code Review was Ready with no blockers; its four non-blocking follow-ups and dependency scan result are recorded in code-review.md. Phase 7 Verification is complete and verification-report.md is present. Local evidence: API 63/63, focused provisioning 16/16, non-browser UI 27/27; local browser execution was unavailable because Docker was unavailable. CI run 37468096043 at commit 28ab7c9 passed provisioning, readiness, run-scoped teardown, API 63/63, and private UI 28/28 including GuestCanBrowseRoomsAndConfirmBooking. The pre-implementation baseline remains Not Found. Phase 8 is in progress: PR #1 was selected as the final PR; phase artifacts, code-review.md, CHANGELOG.md, and this checkpoint are being prepared in the PR worktree. No commit or PR update has been made. I5 remains the approved exclusion of live public API mutations.",
+    "approval_pending":  null,
+    "revision_reason":  "Phase 6 Code Review was Ready with no blockers; its four non-blocking follow-ups and dependency scan result are recorded in code-review.md. Phase 7 Verification is complete and verification-report.md is present. Local evidence: API 63/63, focused provisioning 16/16, non-browser UI 27/27; local browser execution was unavailable because Docker was unavailable. CI run 37474687679 at commit 92bedaab0e59a321339f5c773c7978b994cf79ee passed provisioning, readiness, run-scoped teardown, API 63/63, and private UI 28/28 including GuestCanBrowseRoomsAndConfirmBooking. The pre-implementation baseline remains Not Found. Phase 8 PR #1 is the final PR; its approved title and body are updated, and CHANGELOG.md, code-review.md, impl-manifest.md, verification-report.md, and this checkpoint are included in the PR branch. The PR remains draft pending the new checkpoint commit's CI verification and conversion to ready for review. I5 remains the approved exclusion of live public API mutations.",
     "tasks_completed":  [
                             "T1",
                             "T2",
@@ -24,5 +24,5 @@
                             "I6",
                             "I7"
                         ],
-    "blocked_reason":  "Awaiting approval of the exact final PR body and changelog entry. PR #1 has not yet been updated; artifact preparation is uncommitted."
+    "blocked_reason":  "Awaiting successful CI verification of the final checkpoint synchronization before marking PR #1 ready for review."
 }
