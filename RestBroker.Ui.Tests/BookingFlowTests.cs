@@ -1,6 +1,7 @@
 using Microsoft.Playwright;
 using Microsoft.Playwright.NUnit;
 using NUnit.Framework;
+using System.Collections.Concurrent;
 using System.Web;
 
 namespace RestBroker.Ui.Tests;
@@ -10,6 +11,9 @@ namespace RestBroker.Ui.Tests;
 public sealed class BookingFlowTests : PageTest
 {
     private UiTestConfiguration _configuration = null!;
+    private readonly ConcurrentQueue<string> _browserDiagnostics = new();
+    private bool _traceStarted;
+    private bool _captureReservationDiagnostics;
 
     [SetUp]
     public void ConfigurePrivateUiTarget()
@@ -20,6 +24,14 @@ public sealed class BookingFlowTests : PageTest
     [Test]
     public async Task GuestCanBrowseRoomsAndConfirmBooking()
     {
+        await Context.Tracing.StartAsync(new TracingStartOptions
+        {
+            Screenshots = true,
+            Snapshots = true,
+            Sources = true
+        });
+        _traceStarted = true;
+
         await Page.GotoAsync(_configuration.BaseUrl.ToString());
 
         await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Our Rooms" }))
@@ -56,6 +68,11 @@ public sealed class BookingFlowTests : PageTest
         var checkOut = query["checkout"]
             ?? throw new InvalidOperationException("Room booking link omitted the check-out date.");
 
+        var reservationUri = new Uri(_configuration.BaseUrl, reservationPath);
+        var roomId = reservationUri.AbsolutePath.TrimEnd('/').Split('/').Last();
+        AttachReservationDiagnostics(roomId);
+        _captureReservationDiagnostics = true;
+
         await bookingLink.ClickAsync();
         await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Book This Room" }))
             .ToBeVisibleAsync();
@@ -80,8 +97,39 @@ public sealed class BookingFlowTests : PageTest
     {
         if (TestContext.CurrentContext.Result.Outcome.Status != NUnit.Framework.Interfaces.TestStatus.Failed)
         {
+            if (_traceStarted)
+            {
+                await Context.Tracing.StopAsync();
+            }
+
             return;
         }
+
+        var diagnosticsDirectory = Path.Combine(
+            TestContext.CurrentContext.WorkDirectory,
+            "UiFailureDiagnostics");
+        Directory.CreateDirectory(diagnosticsDirectory);
+
+        if (_traceStarted)
+        {
+            var tracePath = Path.Combine(
+                diagnosticsDirectory,
+                $"{nameof(BookingFlowTests)}-{Guid.NewGuid():N}.zip");
+            await Context.Tracing.StopAsync(new TracingStopOptions { Path = tracePath });
+            _browserDiagnostics.Enqueue($"TRACE: {tracePath}");
+        }
+
+        _browserDiagnostics.Enqueue($"FINAL URL: {Page.Url}");
+        _browserDiagnostics.Enqueue(
+            $"STATUS TEXT: {string.Join(" | ", await Page.GetByRole(AriaRole.Status).AllInnerTextsAsync())}");
+        _browserDiagnostics.Enqueue(
+            $"ALERT TEXT: {string.Join(" | ", await Page.GetByRole(AriaRole.Alert).AllInnerTextsAsync())}");
+
+        var diagnosticsPath = Path.Combine(
+            diagnosticsDirectory,
+            $"{nameof(BookingFlowTests)}-{Guid.NewGuid():N}.txt");
+        await File.WriteAllLinesAsync(diagnosticsPath, _browserDiagnostics);
+        TestContext.Progress.WriteLine($"Browser diagnostics: {diagnosticsPath}");
 
         var screenshotDirectory = Path.Combine(TestContext.CurrentContext.WorkDirectory, "UiFailureScreenshots");
         Directory.CreateDirectory(screenshotDirectory);
@@ -95,6 +143,69 @@ public sealed class BookingFlowTests : PageTest
             FullPage = true,
             Mask = [Page.Locator("input"), Page.Locator("textarea")]
         });
+    }
+
+    private void AttachReservationDiagnostics(string roomId)
+    {
+        Page.PageError += (_, error) =>
+            _browserDiagnostics.Enqueue($"PAGE ERROR: {error}");
+
+        Page.Console += (_, message) =>
+        {
+            if (message.Type == "error")
+            {
+                _browserDiagnostics.Enqueue($"CONSOLE ERROR: {message.Text}");
+            }
+        };
+
+        Page.Request += (_, request) =>
+        {
+            if (IsRoomOrBrandingRequest(request.Url, roomId))
+            {
+                _browserDiagnostics.Enqueue(
+                    $"REQUEST: {request.Method} {request.ResourceType} {GetSafeUrl(request.Url)}");
+            }
+        };
+
+        Page.Response += (_, response) =>
+        {
+            if (IsRoomOrBrandingRequest(response.Url, roomId))
+            {
+                _browserDiagnostics.Enqueue(
+                    $"RESPONSE: {response.Status} {GetSafeUrl(response.Url)}");
+            }
+        };
+
+        Page.RequestFailed += (_, request) =>
+        {
+            if (_captureReservationDiagnostics)
+            {
+                _browserDiagnostics.Enqueue(
+                    $"REQUEST FAILED: {request.Method} {GetSafeUrl(request.Url)}; failure={request.Failure ?? "Not Found"}");
+            }
+        };
+    }
+
+    private static bool IsRoomOrBrandingRequest(string url, string roomId)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var requestUri))
+        {
+            return false;
+        }
+
+        var path = requestUri.AbsolutePath.TrimEnd('/');
+        return path.Equals($"/api/room/{roomId}", StringComparison.Ordinal)
+            || path.Equals("/api/branding", StringComparison.Ordinal);
+    }
+
+    private static string GetSafeUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return "[invalid URL]";
+        }
+
+        return $"{uri.GetLeftPart(UriPartial.Authority)}{uri.AbsolutePath}";
     }
 
     public override BrowserNewContextOptions ContextOptions() => new()

@@ -138,6 +138,15 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload Playwright trace and browser diagnostics
+        if: failure() && steps.ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-browser-diagnostics
+          path: ./RestBroker.Ui.Tests/bin/Release/net8.0/UiFailureDiagnostics/*
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload sanitized provisioning diagnostics
         if: failure() && steps.provision.outcome == 'failure'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
