@@ -64,8 +64,44 @@ for (const [name, service] of Object.entries(services)) {
     ) {
       fail("frontend must publish only target 80 on an ephemeral loopback port");
     }
+    if (service.build?.args?.ROOM_API !== "http://rbp-room:3001") {
+      fail("assets build must set ROOM_API to the rbp-room service");
+    }
   }
 }
+NODE
+}
+
+configure_assets_room_api_build() {
+    local dockerfile="$1"
+    [[ -f "$dockerfile" ]] || fail "pinned assets Dockerfile is missing"
+
+    node - "$dockerfile" <<'NODE'
+const fs = require("node:fs");
+
+const file = process.argv[2];
+const fail = (reason) => {
+  console.error(`Assets Dockerfile configuration failed: ${reason}`);
+  process.exit(1);
+};
+let contents = fs.readFileSync(file, "utf8");
+if (!/^FROM node:24(?:\.14\.1@sha256:[a-f0-9]{64})? AS base\s*$/m.test(contents) ||
+    !/^FROM base AS builder\s*$/m.test(contents)) {
+  fail("Dockerfile does not match the pinned assets build stages");
+}
+if (contents.includes("ARG ROOM_API") || contents.includes("ENV ROOM_API=")) {
+  fail("Dockerfile already defines ROOM_API in a build stage");
+}
+const marker = "FROM base AS builder\n";
+if (contents.split(marker).length !== 2) {
+  fail("expected exactly one assets builder stage");
+}
+contents = contents.replace(marker, `${marker}ARG ROOM_API\nENV ROOM_API=\${ROOM_API}\n`);
+if (!contents.includes("RUN npm run build")) {
+  fail("assets build command is missing");
+}
+fs.writeFileSync(file, contents);
+console.log("Configured the assets builder to bake in the rbp-room API URL.");
 NODE
 }
 
@@ -294,6 +330,11 @@ main() {
             cat "$2" | summarize_compose_status
             return
             ;;
+        --configure-assets-room-api-build)
+            [[ $# -eq 2 ]] || fail "usage: provision-ui.sh --configure-assets-room-api-build <assets-dockerfile>"
+            configure_assets_room_api_build "$2"
+            return
+            ;;
         --pin-dockerfiles)
             [[ $# -eq 3 ]] || fail "usage: provision-ui.sh --pin-dockerfiles <source-directory> <compose-model-json>"
             pin_dockerfiles "$2" "$3"
@@ -382,6 +423,9 @@ services:
   rbp-branding:
     ports: !override []
   rbp-assets:
+    build:
+      args:
+        ROOM_API: http://rbp-room:3001
     ports: !override
       - target: 80
         published: "0"
@@ -405,6 +449,9 @@ YAML
 
     CURRENT_STAGE="base-image pinning"
     pin_dockerfiles "$SOURCE_DIR" "$WORK_DIR/compose-model.json"
+
+    CURRENT_STAGE="assets build-time ROOM_API configuration"
+    configure_assets_room_api_build "$SOURCE_DIR/assets/Dockerfile"
 
     CURRENT_STAGE="platform build and startup"
     run_bounded "${compose_args[@]}" up --build --detach >>"$WORK_DIR/command.log" 2>&1 ||

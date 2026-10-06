@@ -52,6 +52,50 @@ public sealed class UiProvisioningScriptTests
     }
 
     [Test]
+    public void ValidateComposeModel_WhenAssetsBuildUsesLocalhostRoomUrl_Fails()
+    {
+        var model = CreateComposeModel();
+        model["services"]!["rbp-assets"]!["build"] = new JsonObject
+        {
+            ["args"] = new JsonObject { ["ROOM_API"] = "http://localhost:3001" }
+        };
+
+        var result = RunScript(_provisionScript, "--validate-compose-model", WriteComposeModel(model));
+
+        Assert.That(result.ExitCode, Is.Not.Zero);
+        Assert.That(result.StandardError, Does.Contain("assets build must set ROOM_API to the rbp-room service"));
+    }
+
+    [Test]
+    public void ConfigureAssetsRoomApiBuild_AddsRoomApiToBuilderStage()
+    {
+        var source = CreateSourceFixture();
+        var dockerfile = Path.Combine(source, "assets", "Dockerfile");
+
+        var result = RunScript(_provisionScript, "--configure-assets-room-api-build", dockerfile);
+        var configuredDockerfile = File.ReadAllText(dockerfile);
+
+        Assert.That(result.ExitCode, Is.Zero, result.StandardError);
+        Assert.That(configuredDockerfile, Does.Contain(
+            "FROM base AS builder\nARG ROOM_API\nENV ROOM_API=${ROOM_API}\n"));
+    }
+
+    [Test]
+    public void ConfigureAssetsRoomApiBuild_WhenDockerfileDoesNotMatchPinnedStages_FailsWithoutRewrite()
+    {
+        var source = CreateSourceFixture();
+        var dockerfile = Path.Combine(source, "assets", "Dockerfile");
+        const string unexpectedDockerfile = "FROM node:25 AS base\nFROM base AS runner\nRUN npm run build\n";
+        File.WriteAllText(dockerfile, unexpectedDockerfile);
+
+        var result = RunScript(_provisionScript, "--configure-assets-room-api-build", dockerfile);
+
+        Assert.That(result.ExitCode, Is.Not.Zero);
+        Assert.That(result.StandardError, Does.Contain("does not match the pinned assets build stages"));
+        Assert.That(File.ReadAllText(dockerfile), Is.EqualTo(unexpectedDockerfile));
+    }
+
+    [Test]
     public void SummarizeComposeStatus_EmitsOnlyAllowlistedServiceStates()
     {
         var status = new JsonArray
@@ -292,6 +336,14 @@ public sealed class UiProvisioningScriptTests
                     ["dockerfile"] = "Dockerfile"
                 };
             }
+            if (service == "rbp-assets")
+            {
+                definition["build"] ??= new JsonObject();
+                definition["build"]!["args"] = new JsonObject
+                {
+                    ["ROOM_API"] = "http://rbp-room:3001"
+                };
+            }
             services[service] = definition;
         }
 
@@ -306,7 +358,7 @@ public sealed class UiProvisioningScriptTests
             var serviceDirectory = Path.Combine(source, service["rbp-".Length..]);
             Directory.CreateDirectory(serviceDirectory);
             var dockerfile = service == "rbp-assets"
-                ? "FROM node:24 AS base\nFROM base AS runner\n"
+                ? "FROM node:24 AS base\nFROM base AS builder\nWORKDIR /app\nRUN npm run build\nFROM base AS runner\n"
                 : "FROM eclipse-temurin:26-jre-alpine\n";
             File.WriteAllText(Path.Combine(serviceDirectory, "Dockerfile"), dockerfile);
         }
