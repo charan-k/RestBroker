@@ -89,12 +89,18 @@ if (!/^FROM node:24(?:\.14\.1@sha256:[a-f0-9]{64})? AS base\s*$/m.test(contents)
     !/^FROM base AS builder\s*$/m.test(contents)) {
   fail("Dockerfile does not match the pinned assets build stages");
 }
-if (contents.includes("ARG ROOM_API") || contents.includes("ENV ROOM_API=")) {
-  fail("Dockerfile already defines ROOM_API in a build stage");
-}
 const marker = "FROM base AS builder\n";
 if (contents.split(marker).length !== 2) {
   fail("expected exactly one assets builder stage");
+}
+const builderStart = contents.indexOf(marker);
+const nextStage = contents.indexOf("\nFROM ", builderStart + marker.length);
+const builderStage = contents.slice(
+  builderStart,
+  nextStage === -1 ? contents.length : nextStage
+);
+if (/^(?:ARG|ENV)\s+ROOM_API(?:=|\s|$)/m.test(builderStage)) {
+  fail("assets builder stage already defines ROOM_API");
 }
 contents = contents.replace(marker, `${marker}ARG ROOM_API\nENV ROOM_API=\${ROOM_API}\n`);
 if (!contents.includes("RUN npm run build")) {

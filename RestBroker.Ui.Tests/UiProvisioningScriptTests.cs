@@ -358,7 +358,7 @@ public sealed class UiProvisioningScriptTests
             var serviceDirectory = Path.Combine(source, service["rbp-".Length..]);
             Directory.CreateDirectory(serviceDirectory);
             var dockerfile = service == "rbp-assets"
-                ? "FROM node:24 AS base\nFROM base AS builder\nWORKDIR /app\nRUN npm run build\nFROM base AS runner\n"
+                ? "FROM node:24 AS base\nFROM base AS builder\nWORKDIR /app\nRUN npm run build\nFROM base AS runner\nENV ROOM_API=http://rbp-room:3001\n"
                 : "FROM eclipse-temurin:26-jre-alpine\n";
             File.WriteAllText(Path.Combine(serviceDirectory, "Dockerfile"), dockerfile);
         }
