@@ -25,24 +25,29 @@ public sealed class BookingFlowTests : PageTest
         await Expect(Page.GetByRole(AriaRole.Heading, new() { Name = "Our Rooms" }))
             .ToBeVisibleAsync();
 
-        var roomHeadings = Page.GetByRole(AriaRole.Heading, new() { Level = 5 });
-        await Expect(roomHeadings.First).ToBeVisibleAsync();
-        var roomCount = await roomHeadings.CountAsync();
+        var roomCards = Page.Locator("#rooms .room-card");
+        await Expect(roomCards.First).ToBeVisibleAsync();
+        var roomCount = await roomCards.CountAsync();
         Assert.That(roomCount, Is.GreaterThan(0), "The room list should contain at least one named room.");
-        Assert.That(await Page.GetByRole(AriaRole.Link, new() { Name = "Book now" }).CountAsync(),
-            Is.EqualTo(roomCount), "Every listed room should have a booking link.");
-        Assert.That(await Page.GetByText("per night", new() { Exact = true }).CountAsync(),
-            Is.EqualTo(roomCount), "Every listed room should display its nightly price.");
 
-        var roomSummary = roomHeadings.First.Locator("..");
-        Assert.That(await roomSummary.Locator("p").CountAsync(), Is.GreaterThan(0),
-            "A room summary should include a description.");
-        Assert.That(await roomSummary.Locator("span").CountAsync(), Is.GreaterThan(0),
-            "A room summary should list room features.");
-        Assert.That(await Page.GetByText("£", new() { Exact = false }).CountAsync(),
-            Is.GreaterThan(0), "The room list should display nightly prices.");
+        for (var index = 0; index < roomCount; index++)
+        {
+            var roomCard = roomCards.Nth(index);
+            Assert.That(await roomCard.GetByRole(AriaRole.Heading, new() { Level = 5 }).CountAsync(),
+                Is.EqualTo(1), "Every room card should have one room heading.");
+            Assert.That(await roomCard.GetByRole(AriaRole.Link, new() { Name = "Book now" }).CountAsync(),
+                Is.EqualTo(1), "Every room card should have one booking link.");
+            Assert.That(await roomCard.GetByText("per night", new() { Exact = true }).CountAsync(),
+                Is.EqualTo(1), "Every room card should display its nightly price.");
+            Assert.That(await roomCard.Locator(".card-body p").CountAsync(), Is.GreaterThan(0),
+                "A room summary should include a description.");
+            Assert.That(await roomCard.Locator(".card-body span").CountAsync(), Is.GreaterThan(0),
+                "A room summary should list room features.");
+            Assert.That(await roomCard.GetByText("£", new() { Exact = false }).CountAsync(),
+                Is.GreaterThan(0), "Every room card should display its price.");
+        }
 
-        var bookingLink = Page.GetByRole(AriaRole.Link, new() { Name = "Book now" }).First;
+        var bookingLink = roomCards.First.GetByRole(AriaRole.Link, new() { Name = "Book now" });
         var reservationPath = await bookingLink.GetAttributeAsync("href")
             ?? throw new InvalidOperationException("Room booking link did not have a destination.");
         var query = HttpUtility.ParseQueryString(new Uri(_configuration.BaseUrl, reservationPath).Query);
