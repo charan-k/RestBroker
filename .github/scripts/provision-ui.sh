@@ -301,7 +301,7 @@ main() {
     local maven_archive="$WORK_DIR/apache-maven-$MAVEN_VERSION-bin.tar.gz"
     run_bounded curl --fail --silent --show-error --location --retry 3 \
         --output "$maven_archive" \
-        "https://archive.apache.org/dist/maven/maven-$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz" \
+        "https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries/apache-maven-$MAVEN_VERSION-bin.tar.gz" \
         >>"$WORK_DIR/command.log" 2>&1 || fail "Maven archive download failed"
     printf '%s  %s\n' "$MAVEN_SHA512" "$maven_archive" | sha512sum --check --status ||
         fail "Maven archive SHA-512 verification failed"
