@@ -112,6 +112,22 @@ jobs:
           --logger "trx;LogFileName=ui.trx"
           --results-directory ./TestResults/Ui
 
+      - name: Capture room service logs on browser failure
+        if: always() && steps.ui-tests.outcome == 'failure' && steps.provision.outputs.ui-compose-project != ''
+        env:
+          COMPOSE_PROJECT: ${{ steps.provision.outputs.ui-compose-project }}
+          COMPOSE_FILE: ${{ steps.provision.outputs.ui-compose-file }}
+          COMPOSE_OVERRIDE: ${{ steps.provision.outputs.ui-compose-override }}
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/restbroker-ui-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          mkdir -p "$DIAGNOSTICS_DIR"
+          docker compose \
+            --project-name "$COMPOSE_PROJECT" \
+            --file "$COMPOSE_FILE" \
+            --file "$COMPOSE_OVERRIDE" \
+            logs --no-color --timestamps --tail 1000 rbp-room \
+            > "$DIAGNOSTICS_DIR/room-service.log"
+
       - name: Attempt run-scoped UI teardown
         if: always() && steps.provision.outputs.ui-compose-project != ''
         run: |
@@ -144,6 +160,15 @@ jobs:
         with:
           name: ui-browser-diagnostics
           path: ./RestBroker.Ui.Tests/bin/Release/net8.0/UiFailureDiagnostics/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload room service logs
+        if: failure() && steps.ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-room-service-logs
+          path: ${{ runner.temp }}/restbroker-ui-${{ github.run_id }}-${{ github.run_attempt }}/room-service.log
           if-no-files-found: error
           retention-days: 7
 
