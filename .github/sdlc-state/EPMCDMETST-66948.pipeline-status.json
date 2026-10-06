@@ -1,7 +1,7 @@
 ﻿{
     "ticket":  "EPMCDMETST-66948",
-    "current_phase":  "pull-request",
-    "status":  "in_progress",
+    "current_phase":  "completed",
+    "status":  "completed",
     "phases_completed":  [
                              "requirements",
                              "architecture",
@@ -9,12 +9,13 @@
                              "impl-planning",
                              "implementation",
                              "code-review",
-                             "verification"
+                             "verification",
+                             "pull-request"
                          ],
     "artifact_pending_approval":  null,
     "last_updated":  "2026-10-06T19:00:00+05:30",
     "approval_pending":  null,
-    "revision_reason":  "Phase 6 Code Review was Ready with no blockers; its four non-blocking follow-ups and dependency scan result are recorded in code-review.md. Phase 7 Verification is complete and verification-report.md is present. Local evidence: API 63/63, focused provisioning 16/16, non-browser UI 27/27; local browser execution was unavailable because Docker was unavailable. CI run 37474687679 at commit 92bedaab0e59a321339f5c773c7978b994cf79ee passed provisioning, readiness, run-scoped teardown, API 63/63, and private UI 28/28 including GuestCanBrowseRoomsAndConfirmBooking. The pre-implementation baseline remains Not Found. Phase 8 PR #1 is the final PR; its approved title and body are updated, and CHANGELOG.md, code-review.md, impl-manifest.md, verification-report.md, and this checkpoint are included in the PR branch. The PR remains draft pending the new checkpoint commit's CI verification and conversion to ready for review. I5 remains the approved exclusion of live public API mutations.",
+    "revision_reason":  "All eight SDLC phases are complete. Phase 6 Code Review was Ready with no blockers; its four non-blocking follow-ups and dependency scan result are recorded in code-review.md. Phase 7 Verification is recorded in verification-report.md. Local evidence: API 63/63, focused provisioning 16/16, non-browser UI 27/27; local browser execution was unavailable because Docker was unavailable. CI run 37476270493 at commit 8b27d5e57ed185f8c5f5eac62132cc22c4b44232 passed provisioning, readiness, run-scoped teardown, API 63/63, and private UI 28/28 including GuestCanBrowseRoomsAndConfirmBooking. Run 37468096043 also verifies the implementation at 28ab7c9. The pre-implementation baseline remains Not Found. PR #1 is the final PR, titled EPMCDMETST-66948: Add isolated API and private UI test automation; its approved body is published and it is ready for review. CHANGELOG.md, code-review.md, impl-manifest.md, verification-report.md, and this checkpoint are included on the PR branch. I5 remains the approved exclusion of live public API mutations.",
     "tasks_completed":  [
                             "T1",
                             "T2",
@@ -24,5 +25,5 @@
                             "I6",
                             "I7"
                         ],
-    "blocked_reason":  "Awaiting successful CI verification of the final checkpoint synchronization before marking PR #1 ready for review."
+    "blocked_reason":  null
 }
