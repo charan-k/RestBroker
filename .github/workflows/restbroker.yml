@@ -1,0 +1,182 @@
+name: RestBroker test suites
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  DOTNET_NOLOGO: true
+  DOTNET_CLI_TELEMETRY_OPTOUT: true
+
+jobs:
+  api-tests:
+    name: API tests (fake-backed)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Run fake-backed API tests
+        run: >-
+          dotnet test ./RestBroker.Api.Tests/RestBroker.Api.Tests.csproj
+          --configuration Release
+          --logger "trx;LogFileName=api.trx"
+          --results-directory ./TestResults/Api
+
+      - name: Upload API test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: api-test-results
+          path: ./TestResults/Api/api.trx
+          if-no-files-found: ignore
+          retention-days: 7
+
+  private-ui-tests:
+    name: Private UI tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up .NET 8
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Set up JDK 26
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "26"
+
+      - name: Set up Node.js 24.14.1
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.14.1
+
+      - name: Verify exact Node.js and npm versions
+        run: |
+          test "$(node --version)" = "v24.14.1"
+          npm install --global npm@11.11.0
+          test "$(npm --version)" = "11.11.0"
+
+      - name: Require Compose support for !override
+        run: |
+          version="$(docker compose version --short | sed 's/^v//')"
+          if ! [[ "$version" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+            echo "Could not verify the Docker Compose version." >&2
+            exit 1
+          fi
+          major="${BASH_REMATCH[1]}"
+          minor="${BASH_REMATCH[2]}"
+          patch="${BASH_REMATCH[3]}"
+          if (( major < 2 || (major == 2 && minor < 24) || (major == 2 && minor == 24 && patch < 4) )); then
+            echo "Docker Compose 2.24.4 or later is required for !override." >&2
+            exit 1
+          fi
+
+      - name: Provision private UI environment
+        id: provision
+        timeout-minutes: 25
+        run: bash ./.github/scripts/provision-ui.sh
+
+      - name: Build UI test project
+        run: dotnet build ./RestBroker.Ui.Tests/RestBroker.Ui.Tests.csproj --configuration Release
+
+      - name: Install Chromium and browser dependencies
+        run: pwsh ./RestBroker.Ui.Tests/bin/Release/net8.0/playwright.ps1 install --with-deps chromium
+
+      - name: Run private UI browser tests
+        id: ui-tests
+        timeout-minutes: 20
+        env:
+          RESTBOOKER_UI_BASE_URL: ${{ steps.provision.outputs.ui-base-url }}
+        run: >-
+          dotnet test ./RestBroker.Ui.Tests/RestBroker.Ui.Tests.csproj
+          --configuration Release
+          --no-build
+          --logger "trx;LogFileName=ui.trx"
+          --results-directory ./TestResults/Ui
+
+      - name: Capture room and assets service logs on browser failure
+        if: always() && steps.ui-tests.outcome == 'failure' && steps.provision.outputs.ui-compose-project != ''
+        env:
+          COMPOSE_PROJECT: ${{ steps.provision.outputs.ui-compose-project }}
+          COMPOSE_FILE: ${{ steps.provision.outputs.ui-compose-file }}
+          COMPOSE_OVERRIDE: ${{ steps.provision.outputs.ui-compose-override }}
+          DIAGNOSTICS_DIR: ${{ runner.temp }}/restbroker-ui-${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          mkdir -p "$DIAGNOSTICS_DIR"
+          docker compose \
+            --project-name "$COMPOSE_PROJECT" \
+            --file "$COMPOSE_FILE" \
+            --file "$COMPOSE_OVERRIDE" \
+            logs --no-color --timestamps --tail 1000 rbp-room rbp-assets \
+            > "$DIAGNOSTICS_DIR/ui-services.log"
+
+      - name: Attempt run-scoped UI teardown
+        if: always() && steps.provision.outputs.ui-compose-project != ''
+        run: |
+          bash ./.github/scripts/cleanup-ui.sh \
+            '${{ steps.provision.outputs.ui-compose-project }}' \
+            '${{ steps.provision.outputs.ui-compose-file }}' \
+            '${{ steps.provision.outputs.ui-compose-override }}'
+
+      - name: Upload UI test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-test-results
+          path: ./TestResults/Ui/ui.trx
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload masked UI failure screenshots
+        if: failure() && steps.ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-failure-screenshots
+          path: ./RestBroker.Ui.Tests/bin/Release/net8.0/UiFailureScreenshots/*.png
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Upload Playwright trace and browser diagnostics
+        if: failure() && steps.ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-browser-diagnostics
+          path: ./RestBroker.Ui.Tests/bin/Release/net8.0/UiFailureDiagnostics/*
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload UI service logs
+        if: failure() && steps.ui-tests.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-service-logs
+          path: ${{ runner.temp }}/restbroker-ui-${{ github.run_id }}-${{ github.run_attempt }}/ui-services.log
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload sanitized provisioning diagnostics
+        if: failure() && steps.provision.outcome == 'failure'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ui-provisioning-diagnostics
+          path: ${{ runner.temp }}/restbroker-ui-${{ github.run_id }}-${{ github.run_attempt }}/provisioning-diagnostics.txt
+          if-no-files-found: ignore
+          retention-days: 7

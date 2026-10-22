@@ -1,0 +1,7 @@
+# Local Atlassian API credentials — never commit
+.vscode/atlassian-api.local.json
+*.local.json
+
+**/bin/
+**/obj/
+TestResults/
